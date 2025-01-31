@@ -1,16 +1,25 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, lit, to_timestamp
-from pyspark.sql.types import StructType, StructField, StringType, FloatType, DoubleType
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+
+
+def process_batch(batch_df, batch_id):
+    print(f"Processing batch {batch_id}")
+    count = batch_df.count()
+    print(f"Number of transactions in this batch: {count}")
+    batch_df.show()
+
 # Créer une session Spark avec le support pour Kafka et MinIO
 spark = SparkSession.builder \
  .appName("KafkaSparkConsumer") \
  .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,org.apache.hadoop:hadoop-aws:3.3.4") \
  .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
  .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true") \
- .config("fs.s3a.endpoint", "http://localhost:9000") \
- .config("fs.s3a.access.key", "minio") \
- .config("fs.s3a.secret.key", "minio123") \
- .config("fs.s3a.path.style.access", "true") \
+ .config("spark.hadoop.fs.s3a.endpoint", "http://localhost:9000") \
+ .config("spark.hadoop.fs.s3a.access.key", "minio") \
+ .config("spark.hadoop.fs.s3a.secret.key", "minio123") \
+ .config("spark.hadoop.fs.s3a.path.style.access", "true") \
+ .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
  .getOrCreate()
 # Définir le schéma simplifié correspondant à votre producteur
 schema = StructType([
@@ -55,13 +64,16 @@ final_df = transformed_df.select(
 "timezone",
 "moyen_paiement"
 )
+
+
 # Écrire les données transformées dans MinIO au format Parquet
 query = final_df.writeStream \
- .outputMode("append") \
- .format("parquet") \
- .option("path", "s3a://warehouse/transactions") \
- .option("checkpointLocation", "s3a://warehouse/checkpoints/transactions") \
- .start()
+    .foreachBatch(process_batch) \
+    .outputMode("append") \
+    .format("parquet") \
+    .option("path", "s3a://warehouse/transactions") \
+    .option("checkpointLocation", "s3a://warehouse/checkpoints/transactions") \
+    .start()
 try:
     query.awaitTermination()
 except KeyboardInterrupt:
